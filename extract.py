@@ -39,6 +39,8 @@ def main(path):
                 "type": p.get("type"),
                 "dur": p.get("duration"),
                 "desc": p.get("descKey"),
+                "period": per["periodDescriptor"]["number"],
+                "time": p.get("timeInPeriod"),
             })
 
     periods = [p["periodDescriptor"]["periodType"] for p in d["linescore"].get("byPeriod", [])]

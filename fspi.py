@@ -38,7 +38,7 @@ GAME_MS = {
     "sv940": 10, "sv850": -12.5,
     "shutout": 50, "shut_out": -50, "clinch": 30,
 }
-CLINCH_LATE_SEC = 19 * 60   # final minute of regulation
+CLINCH_LATE_SEC = 18 * 60   # guide #11: go-ahead goal at or after 18:00 of the 3rd
 MONTHLY = 125
 SEASONAL = 250
 CUP = 750
@@ -62,24 +62,48 @@ GROUPS = {
 }
 
 
+def is_fight(p):
+    return p["type"] == "MAJ" and p.get("desc") == "fighting"
+
+
+def unmatched_fights(pens):
+    """Guide #25: a fighting major scores 0 only when both teams received one at the
+    same period and time (matched pairs). Returns {team: count of unmatched majors}."""
+    by_slot = defaultdict(lambda: defaultdict(int))
+    for p in pens:
+        if is_fight(p):
+            by_slot[(p.get("period"), p.get("time"))][p["team"]] += 1
+    out = defaultdict(int)
+    for teams in by_slot.values():
+        paired = min(teams.values()) if len(teams) == 2 else 0
+        for t, n in teams.items():
+            out[t] += n - paired
+    return out
+
+
 def penalty_class(p):
+    """Index components for one penalty (fighting majors handled by unmatched_fights)."""
     t, dur = p["type"], p["dur"]
     if t in ("MIN", "BEN", "PS"):
-        return "pen_extended" if dur == 4 else "pen_minor"   # double minor = extended
+        return ["pen_extended" if dur == 4 else "pen_minor"]   # double minor = extended
     if t == "MAJ":
-        # Calibrated against official closes: fighting majors carry no index points.
-        return None if p.get("desc") == "fighting" else "pen_extended"
+        return [] if is_fight(p) else ["pen_extended"]
     if t == "MIS":
-        return "pen_misconduct"
-    if t in ("GAM", "MAT"):
-        return "pen_ejection"
-    return "pen_minor"
+        return ["pen_misconduct"]
+    if t == "MAT":
+        # Calibrated against official closes: a match penalty scores as both an
+        # extended penalty and an ejection.
+        return ["pen_extended", "pen_ejection"]
+    if t == "GAM":
+        return ["pen_ejection"]
+    return ["pen_minor"]
 
 
 def team_game_rows(g):
     rows = []
     so = "SO" in g["periods"]
     goals = [x for x in g["goals"] if x["ptype"] != "SO"]   # shootout goals never count
+    fights = unmatched_fights(g["pens"])
     for side, opp in (("home", "away"), ("away", "home")):
         me, them = g[side], g[opp]
         t, o = me["abbr"], them["abbr"]
@@ -109,9 +133,9 @@ def team_game_rows(g):
         c["giveaway"] = me["give"]
         for p in g["pens"]:
             if p["team"] == t:
-                k = penalty_class(p)
-                if k:
+                for k in penalty_class(p):
                     c[k] += 1
+        c["pen_extended"] += fights[t]
 
         gf = sum(1 for x in goals if x["team"] == t)
         ga = sum(1 for x in goals if x["team"] == o)
@@ -142,14 +166,12 @@ def team_game_rows(g):
             elif svp <= 0.850: c["sv850"] = 1
         if ga == 0: c["shutout"] = 1          # 0-0 shootout credits both teams
         if gf == 0: c["shut_out"] = 1
-        # "Game clinching goal": the guide does not define it. Calibrated against the
-        # official index closes, it behaves as a goal that wins the game at the death:
-        # the sudden-death OVERTIME winner, or a tie-breaking winner scored in the final
-        # minute of regulation. Ordinary game-winners and shootout wins earn nothing.
-        # (Official data pins the cut-off between 18:16 and 19:00 of the 3rd; we use 19:00.)
+        # "Game clinching goal" (guide #11): the sudden-death OVERTIME winner, or in
+        # regulation a go-ahead goal (putting the team up by exactly 1) scored at or
+        # after 18:00 of the 3rd in a game won by exactly 1. Shootout wins earn nothing.
         if won and extra and not so:
             c["clinch"] = 1
-        elif won and not extra:
+        elif won and not extra and fin_me - fin_them == 1:
             lead_for_me = 1 if side == "home" else -1
             tie_breaker = None          # last goal that broke a tie in our favour
             for x in goals:             # goals are in game order
